@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <map>
+#include <algorithm>
 
 #include "hybrid_astar.hpp"
 
@@ -153,6 +154,11 @@ class CL_CBS {
 				return true;
 			}
 
+
+			// solution = P.solution
+
+			// return true;
+
 			// create additional nodes to resolve conflict
 			// std::cout << "Found conflict: " << conflict << std::endl;
 
@@ -167,7 +173,7 @@ class CL_CBS {
 				// (optional) check that this constraint was not included already
 				// std::cout << newNode.constraints[i] << std::endl;
 				// std::cout << c.second << std::endl;
-				assert(!newNode.constraints[i].overlap(c.second));
+				// assert(!newNode.constraints[i].overlap(c.second));
 
 				newNode.constraints[i].add(c.second);
 

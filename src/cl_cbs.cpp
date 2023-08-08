@@ -158,6 +158,13 @@ struct State {
 		return os << "(" << s.x << "," << s.y << ":" << s.yaw << ")@" << s.time;
 	}
 
+	double collisionScore(const State& other) const {
+		double tmp = sqrt(pow(2 * Constants::LF, 2) + pow(Constants::carWidth, 2) - 
+					pow(this->x - other.x, 2) + pow(this->y - other.y, 2));
+
+		return std::max(0.0, 1.0);
+	}
+
 	int time;
 	double x;
 	double y;
@@ -230,7 +237,6 @@ struct Constraint {
 			return true;
 		return !this->s.agentCollision(state);
 	}
-
 
 	double collisionScore(const State &other) const {
 		

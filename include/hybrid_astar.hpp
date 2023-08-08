@@ -159,8 +159,11 @@ class HybridAStar {
 				if (closedSet.find(m_env.calcIndex(neighbor.state)) ==
 						closedSet.end()) {  // 邻居节点不在 closed list
 
+					// 计算当前邻居节点的 cScore
+					double cScore = current.cScore + neighbor.collision;
+
 					// 计算当前邻居节点的 gScore
-					Cost tentative_gScore = current.gScore + neighbor.cost; // state cost + action cost
+					Cost tentative_gScore = current.gScore + neighbor.cost + cScore; // state cost + action cost + collision cost
 
 					// 在 open list 中寻找（stateToHeap）
 					auto iter = stateToHeap.find(m_env.calcIndex(neighbor.state));

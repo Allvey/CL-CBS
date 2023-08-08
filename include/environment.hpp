@@ -366,16 +366,22 @@ class Environment {
 				g = g * Constants::penaltyReversing;
 			}
 			State tempState(xSucc, ySucc, yawSucc, s.time + 1);
+
+			double cScore = getCollisionScore(tempState); // - zxt 
+
 			if (stateValid(tempState)) {
 				neighbors.emplace_back(
-						Neighbor<State, Action, double>(tempState, act, g, 0));
+						Neighbor<State, Action, double>(tempState, act, g, cScore));
 			}
 		}
 		// wait
 		g = Constants::dx[0];
 		State tempState(s.x, s.y, s.yaw, s.time + 1);
+
+		double cScore = getCollisionScore(tempState); // - zxt 
+		
 		if (stateValid(tempState)) {
-			neighbors.emplace_back(Neighbor<State, Action, double>(tempState, 6, g, 0));
+			neighbors.emplace_back(Neighbor<State, Action, double>(tempState, 6, g, cScore));
 		}
 	}
 	State getGoal() { return m_goals[m_agentIdx]; }
@@ -437,6 +443,8 @@ class Environment {
 	}
 
 	bool stateValid(const State &s) {
+
+		// 检测静态障碍物碰撞
 		double x_ind = s.x / Constants::mapResolution;
 		double y_ind = s.y / Constants::mapResolution;
 		if (x_ind < 0 || x_ind >= m_dimx || y_ind < 0 || y_ind >= m_dimy)
@@ -446,16 +454,17 @@ class Environment {
 			if (s.obsCollision(*it)) return false;
 		}
 
-		auto it = m_dynamic_obstacles.equal_range(s.time);
-		for (auto itr = it.first; itr != it.second; ++itr) {
-			if (s.agentCollision(itr->second)) return false;
-		}
+		// auto it = m_dynamic_obstacles.equal_range(s.time);
+		// for (auto itr = it.first; itr != it.second; ++itr) {
+		// 	if (s.agentCollision(itr->second)) return false;
+		// }
 
-		auto itlow = m_dynamic_obstacles.lower_bound(-s.time);
-		auto itup = m_dynamic_obstacles.upper_bound(-1);
-		for (auto it = itlow; it != itup; ++it)
-			if (s.agentCollision(it->second)) return false;
+		// auto itlow = m_dynamic_obstacles.lower_bound(-s.time);
+		// auto itup = m_dynamic_obstacles.upper_bound(-1);
+		// for (auto it = itlow; it != itup; ++it)
+		// 	if (s.agentCollision(it->second)) return false; - zxt 弃用
 
+		// 检测约束节点碰撞
 		for (auto it = m_constraints->constraints.begin();
 				 it != m_constraints->constraints.end(); it++) {
 			if (!it->satisfyConstraint(s)) return false;
@@ -464,8 +473,22 @@ class Environment {
 		return true;
 	}
 
-	double getCollisionScore(const State &s) {
-		;
+	double getCollisionScore(const State &s) const { 
+
+		/**
+		* @brief 获取车辆在当前状态下与其他车辆的冲突分数
+		* @param s 车辆当前状态
+		* @note
+		*/
+
+		double collisionScore = 0;
+
+		for (auto it = m_constraints->constraints.begin();
+				 it != m_constraints->constraints.end(); it++) {
+			collisionScore += s.collisionScore(it->s);
+		}
+
+		return collisionScore;
 	}
 
  private:
