@@ -85,7 +85,7 @@ statistical purposes.
 */
 
 template <typename State, typename Action, typename Cost, typename Conflict,
-					typename Constraints, typename Environment>
+					typename Constraints, typename Constraint, typename Environment>
 class CL_CBS {
  public:
 	CL_CBS(Environment& environment) : m_env(environment) {}
@@ -101,16 +101,22 @@ class CL_CBS {
 		start.cost = 0;
 		start.id = 0;
 
+		// 安全圈缩放比例
+		double scale = 5;
+
+		/*
+		  使用混合A*赋予所有车辆初始轨迹
+		*/
 		for (size_t i = 0; i < initialStates.size(); ++i) {
 			// if (i < solution.size() && solution[i].states.size() > 1) {
 			//   start.solution[i] = solution[i];
 			//   std::cout << "use existing solution for agent: " << i << std::endl;
 			// } else {
-			LowLevelEnvironment llenv(m_env, i, start.constraints[i]);
+			LowLevelEnvironment llenv(m_env, i, start.constraints[i], 1);
 			LowLevelSearch_t lowLevel(llenv);
 
 			// 对于智能体 i 在 lowlevel 进行混合 A* 搜索
-			bool success = lowLevel.search(initialStates[i], start.solution[i]);
+			bool success = lowLevel.search(initialStates[i], start.solution[i], 1);
 			if (!success) {
 				return false;
 			}
@@ -119,6 +125,11 @@ class CL_CBS {
 			start.cost += start.solution[i].pcost;
 		}
 
+		/*
+		  HighLevel Search
+		*/
+
+		// 设置 HighLevel 堆栈
 		// std::priority_queue<HighLevelNode> open;
 		typename boost::heap::d_ary_heap<HighLevelNode, boost::heap::arity<2>, boost::heap::mutable_<true>>
 				open;
@@ -126,12 +137,18 @@ class CL_CBS {
 		auto handle = open.push(start);
 		(*handle).handle = handle;
 
+		// 设置计时器
 		std::chrono::high_resolution_clock::time_point
 				startTime = std::chrono::high_resolution_clock::now(),
 				endTime;
+
 		solution.clear();
 		int id = 1;
+
 		while (!open.empty()) {
+
+
+			// 超时判断
 			endTime = std::chrono::high_resolution_clock::now();
 			if (std::chrono::duration_cast<std::chrono::duration<double>>(endTime -
 																																		startTime)
@@ -141,60 +158,61 @@ class CL_CBS {
 				return false;
 			}
 
+			// 取出栈顶节点
 			HighLevelNode P = open.top();
 			m_env.onExpandHighLevelNode(P.cost);
 			// std::cout << "expand: " << P << std::endl;
 
-			open.pop();
-
+			// 检测首个冲突，用于生成新节点
 			Conflict conflict;
-			if (!m_env.getFirstConflict(P.solution, conflict)) {
-				// std::cout << "done; cost: " << P.cost << std::endl;
+			if (!m_env.getFirstConflict(P.solution, conflict, 1)) {
+				// // 如果比例恢复到正常值
+				// if (scale <= 1) {
+				// 	// std::cout << "done; cost: " << P.cost << std::endl;
+				// 	solution = P.solution;
+				// 	return true;
+				// } else { // 否则放大比例，继续优化
+				// 	// scale -= 1;
+				// 	m_env.setLowLevelScale(std::max(scale, (double)1));
+				// 	continue;
+				// }
+
 				solution = P.solution;
 				return true;
 			}
 
+			// 构造新的冲突树节点
+			HighLevelNode newNode = P;
+			newNode.id = id;
 
-			// solution = P.solution
+			newNode.cost -= newNode.solution[conflict.agent1].pcost;
 
-			// return true;
+			newNode.cost -= newNode.solution[conflict.agent2].pcost;
 
-			// create additional nodes to resolve conflict
-			// std::cout << "Found conflict: " << conflict << std::endl;
+			// std::cout << conflict.time << std::endl;
 
-			std::map<size_t, Constraints> constraints;
-			m_env.createConstraintsFromConflict(conflict, constraints);
-			for (const auto& c : constraints) {
-				// std::cout << "Add HL node for " << c.first << std::endl;
-				size_t i = c.first;
-				// std::cout << "create child with id " << id << std::endl;
-				HighLevelNode newNode = P;
-				newNode.id = id;
-				// (optional) check that this constraint was not included already
-				// std::cout << newNode.constraints[i] << std::endl;
-				// std::cout << c.second << std::endl;
-				// assert(!newNode.constraints[i].overlap(c.second));
+			// 构造耦合的 low level 环境
+			LowLevelDuelEnvironment lldenv(m_env, conflict, initialStates, scale);
 
-				newNode.constraints[i].add(c.second);
+			bool success = lldenv.solve(newNode.solution);
 
-				newNode.cost -= newNode.solution[i].pcost;
+			newNode.cost += newNode.solution[conflict.agent1].pcost;
 
-				LowLevelEnvironment llenv(m_env, i, newNode.constraints[i]);
-				LowLevelSearch_t lowLevel(llenv);
-				bool success = lowLevel.search(initialStates[i], newNode.solution[i]);
+			newNode.cost += newNode.solution[conflict.agent2].pcost;
 
-				newNode.cost += newNode.solution[i].pcost;
-
-				if (success) {
-					// std::cout << "  success. cost: " << newNode.cost << std::endl;
-					auto handle = open.push(newNode);
-					(*handle).handle = handle;
-				}
-
-				++id;
+			if (success) {
+				open.pop();
+				// std::cout << "  success. cost: " << newNode.cost << std::endl;
+				auto handle = open.push(newNode);
+				(*handle).handle = handle;
 			}
-		}
 
+			id++;
+
+			// scale -= 1;
+			// m_env.setLowLevelScale(std::max(scale, (double)1));
+
+		}
 		return false;
 	}
 
@@ -233,12 +251,12 @@ class CL_CBS {
 	};
 
 	struct LowLevelEnvironment {
-		LowLevelEnvironment(Environment& env, size_t agentIdx, const Constraints& constraints)
-				: m_env(env)
+		LowLevelEnvironment(Environment& env, size_t agentIdx, const Constraints& constraints, double scale = 1)
+				: m_env(env), scale(scale)
 		// , m_agentIdx(agentIdx)
 		// , m_constraints(constraints)
 		{
-			m_env.setLowLevelContext(agentIdx, &constraints);
+			m_env.setLowLevelContext(agentIdx, &constraints, scale);
 		}
 
 		Cost admissibleHeuristic(const State& s) {
@@ -252,8 +270,8 @@ class CL_CBS {
 		}
 
 		void getNeighbors(const State& s, Action act,
-											std::vector<Neighbor<State, Action, Cost>>& neighbors) {
-			m_env.getNeighbors(s, act, neighbors);
+											std::vector<Neighbor<State, Action, Cost>>& neighbors, int hardCheck) {
+			m_env.getNeighbors(s, act, neighbors, hardCheck);
 		}
 
 		State getGoal() { return m_env.getGoal(); }
@@ -272,6 +290,105 @@ class CL_CBS {
 
 	 private:
 		Environment& m_env;
+		double scale;
+	};
+
+	struct LowLevelDuelEnvironment {
+		LowLevelDuelEnvironment(Environment& env, Conflict& conflict, const std::vector<State>& initialStates, double scale)
+				: m_env(env), m_conflict(conflict), m_initialStates(initialStates) {}
+
+		bool solve(std::vector<PlanResult<State, Action, double>> &duelSolution) {
+
+			Conflict conflict;
+
+			double scale1 = 1;
+
+			double scale2 = 3;
+
+			while ((scale1 >= 1 || scale2 >= 1)) {
+
+				if (m_env.getDuelConflict(duelSolution, m_conflict.agent1, m_conflict.agent2, conflict)) {  // 若两车存在冲突，或者 scale 未恢复
+
+					// std::cout << "here1" << std::endl;
+
+					if (scale1 >= scale2) {
+						// 分配给车辆 1 的冲突
+						Constraints c1;
+						c1.constraints.emplace(
+								Constraint(conflict.time, conflict.s2, conflict.agent2));
+						
+						// 构造车辆 1 的 lowlevel 
+						LowLevelEnvironment llenv1(m_env, conflict.agent1, c1, scale1);
+						LowLevelSearch_t lowLevel1(llenv1);
+
+						bool success1 = lowLevel1.search(m_initialStates[conflict.agent1], duelSolution[conflict.agent1], 1);
+
+						scale1--;
+
+						m_env.setLowLevelScale(std::max(scale1, (double)1));
+					} else {
+						// 分配给车辆 2 的冲突
+						Constraints c2;
+						c2.constraints.emplace(
+								Constraint(conflict.time, conflict.s1, conflict.agent1));
+						
+						// 构造车辆 2 的 lowlevel 
+						LowLevelEnvironment llenv2(m_env, conflict.agent2, c2, scale2);
+						LowLevelSearch_t lowLevel2(llenv2);
+
+						scale2--;
+
+						bool success2 = lowLevel2.search(m_initialStates[conflict.agent2], duelSolution[conflict.agent2], 1);
+					
+						m_env.setLowLevelScale(std::max(scale2, (double)1));
+					}
+				} else {
+					if (scale1 >= scale2) {
+						scale1--;
+						m_env.setLowLevelScale(std::max(scale1, (double)1));
+					} else {
+						scale2--;
+						m_env.setLowLevelScale(std::max(scale2, (double)1));
+					}
+				}
+			}
+
+			return true;
+		}
+
+		Cost admissibleHeuristic(const State& s) {
+			return m_env.admissibleHeuristic(s);
+		}
+
+		bool isSolution(
+				const State& s, Cost g,
+				std::unordered_map<State, std::tuple<State, Action, Cost, Cost>, std::hash<State>>& camefrom) {
+			return m_env.isSolution(s, g, camefrom);
+		}
+
+		void getNeighbors(const State& s, Action act,
+											std::vector<Neighbor<State, Action, Cost>>& neighbors, int hardCheck) {
+			m_env.getNeighbors(s, act, neighbors, hardCheck);
+		}
+
+		State getGoal() { return m_env.getGoal(); }
+
+		int calcIndex(const State& s) { return m_env.calcIndex(s); }
+
+		void onExpandNode(const State& s, Cost fScore, Cost gScore) {
+			// std::cout << "LL expand: " << s << std::endl;
+			m_env.onExpandLowLevelNode(s, fScore, gScore);
+		}
+
+		void onDiscover(const State& /*s*/, Cost /*fScore*/, Cost /*gScore*/) {
+			// std::cout << "LL discover: " << s << std::endl;
+			// m_env.onDiscoverLowLevel(s, m_agentIdx, m_constraints);
+		}
+
+	 private:
+		Environment& m_env;
+		Conflict&  m_conflict;
+		const std::vector<State>& m_initialStates;
 	};
 
  private:

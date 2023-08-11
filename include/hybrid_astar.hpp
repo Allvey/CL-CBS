@@ -82,7 +82,8 @@ class HybridAStar {
 	HybridAStar(Environment& environment) : m_env(environment) {}
 	~HybridAStar() {}
 
-	bool search(const State& startState, PlanResult<State, Action, Cost>& solution, Cost initialCost = 0, Cost freeCollision = 0) {
+	bool search(const State& startState, PlanResult<State, Action, Cost>& solution, int hardCheck, 
+			Cost initialCost = 0, Cost freeCollision = 0) {
 		solution.states.clear();
 		solution.actions.clear();
 		solution.pcost = 0;
@@ -152,7 +153,7 @@ class HybridAStar {
 			
 			// 获取邻居节点
 			neighbors.clear();
-			m_env.getNeighbors(current.state, current.action, neighbors);
+			m_env.getNeighbors(current.state, current.action, neighbors, hardCheck);
 
 			// 遍历邻居节点
 			for (const Neighbor<State, Action, Cost>& neighbor : neighbors) {
@@ -163,7 +164,7 @@ class HybridAStar {
 					double cScore = current.cScore + neighbor.collision;
 
 					// 计算当前邻居节点的 gScore
-					Cost tentative_gScore = current.gScore + neighbor.cost + cScore; // state cost + action cost + collision cost
+					Cost tentative_gScore = current.gScore + neighbor.cost; // state cost + action cost + collision cost
 
 					// 在 open list 中寻找（stateToHeap）
 					auto iter = stateToHeap.find(m_env.calcIndex(neighbor.state));

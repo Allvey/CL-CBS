@@ -116,15 +116,15 @@ struct State {
 	}
 
 
-	bool agentCollision(const State& other) const {
+	bool agentCollision(const State& other, double scale) const {
 
 	/**
 	* @brief 检测当前智能体状态与其他智能体状态之间是否存在冲突.
 	*/
 		
 #ifndef PRCISE_COLLISION
-		if (pow(this->x - other.x, 2) + pow(this->y - other.y, 2) <
-				pow(2 * Constants::LF, 2) + pow(Constants::carWidth, 2))
+		if (sqrt(pow(this->x - other.x, 2) + pow(this->y - other.y, 2)) <
+				sqrt(pow(2 * Constants::LF / scale, 2) + pow(Constants::carWidth / scale, 2)))
 			return true;
 		return false;
 #else
@@ -162,7 +162,7 @@ struct State {
 		double tmp = sqrt(pow(2 * Constants::LF, 2) + pow(Constants::carWidth, 2) - 
 					pow(this->x - other.x, 2) + pow(this->y - other.y, 2));
 
-		return std::max(0.0, 1.0);
+		return std::max(0.0, tmp);
 	}
 
 	int time;
@@ -231,11 +231,11 @@ struct Constraint {
 							<< "]";
 	}
 
-	bool satisfyConstraint(const State& state) const {
+	bool satisfyConstraint(const State& state, double scale) const {
 		if (state.time < this->time ||
 				state.time > this->time + Constants::constraintWaitTime)
 			return true;
-		return !this->s.agentCollision(state);
+		return !this->s.agentCollision(state, scale);
 	}
 
 	double collisionScore(const State &other) const {
@@ -448,7 +448,7 @@ int main(int argc, char* argv[]) {
 					std::pair<int, State>(-1, State(goal->x, goal->y, goal->yaw)));
 		}
 
-		CL_CBS<State, Action, double, Conflict, Constraints,
+		CL_CBS<State, Action, double, Conflict, Constraints, Constraint,
 			Environment<Location, State, Action, double, Conflict, Constraint, Constraints>>
 				cbsHybrid(mapf);
 

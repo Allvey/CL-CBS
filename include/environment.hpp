@@ -140,7 +140,7 @@ class Environment {
 	/// High Level Environment functions
 	bool getFirstConflict(
 			const std::vector<PlanResult<State, Action, double>> &solution,
-			Conflict &result) {
+			Conflict &result, double scale) {
 		/**
 		* @brief 获取第时间序列一个冲突.
 		*/
@@ -151,11 +151,13 @@ class Environment {
 		}
 		for (int t = 0; t < max_t; ++t) {
 			// check drive-drive collisions
+			// 取第 i 个智能体在 t 时刻状态
 			for (size_t i = 0; i < solution.size(); ++i) {
 				State state1 = getState(i, solution, t);
+				// 取第 j 个智能体在 t 时刻状态
 				for (size_t j = i + 1; j < solution.size(); ++j) {
 					State state2 = getState(j, solution, t);
-					if (state1.agentCollision(state2)) {
+					if (state1.agentCollision(state2, scale)) {
 						result.time = t;
 						result.agent1 = i;
 						result.agent2 = j;
@@ -166,6 +168,32 @@ class Environment {
 				}
 			}
 		}
+		return false;
+	}
+
+	bool getDuelConflict(const std::vector<PlanResult<State, Action, double>> &duelSolution, 
+							size_t agent1, size_t agent2, Conflict &result) {
+		
+		// std::cout << "here0" << std::endl;
+			
+		result.agent1 = agent1;
+		result.agent2 = agent2;
+
+		// std::cout << duelSolution[0].states.size() << std::endl;
+		
+		int max_t = std::max(duelSolution[agent1].states.size(), duelSolution[agent2].states.size()) - 1;
+
+		for (int t = 0; t < max_t; t++) {
+			State state1 = getState(agent1, duelSolution, t);
+			State state2 = getState(agent2, duelSolution, t);
+			if (state1.agentCollision(state2, m_scale)) {
+				result.time = t;
+				result.s1 = state1;
+				result.s2 = state2;
+				return true;
+			}
+		}
+
 		return false;
 	}
 
@@ -191,13 +219,14 @@ class Environment {
 	int highLevelExpanded() { return m_highLevelExpanded; }
 
 	/// Low Level Environment functions
-	void setLowLevelContext(size_t agentIdx, const Constraints *constraints) {
+	void setLowLevelContext(size_t agentIdx, const Constraints *constraints, double scale) {
 		assert(constraints);  // NOLINT
 		m_agentIdx = agentIdx;
 		m_constraints = constraints;
 		m_lastGoalConstraint = -1;
+		m_scale = scale;
 		for (const auto &c : constraints->constraints) {
-			if (m_goals[m_agentIdx].agentCollision(c.s)) {
+			if (m_goals[m_agentIdx].agentCollision(c.s, 1)) {
 				m_lastGoalConstraint = std::max(m_lastGoalConstraint, c.time);
 			}
 		}
@@ -206,6 +235,12 @@ class Environment {
 		//           << " Constraints:" << constraints->constraints.size()
 		//           << "  lastGoalConstraints:" << m_lastGoalConstraint <<
 		//           std::endl;
+	}
+
+	void setLowLevelScale(double scale) {
+
+		m_scale = scale;
+
 	}
 
 	double admissibleHeuristic(const State &s) {
@@ -336,7 +371,7 @@ class Environment {
 		return true;
 	}
 
-	void getNeighbors(const State &s, Action action, std::vector<Neighbor<State, Action, double>> &neighbors) {
+	void getNeighbors(const State &s, Action action, std::vector<Neighbor<State, Action, double>> &neighbors, int hardCheck) {
 		neighbors.clear();
 		double g = Constants::dx[0];
 		for (Action act = 0; act < 6; act++) {  // has 6 directions for Reeds-Shepp
@@ -369,7 +404,7 @@ class Environment {
 
 			double cScore = getCollisionScore(tempState); // - zxt 
 
-			if (stateValid(tempState)) {
+			if (stateValid(tempState, hardCheck, m_scale)) {
 				neighbors.emplace_back(
 						Neighbor<State, Action, double>(tempState, act, g, cScore));
 			}
@@ -380,7 +415,7 @@ class Environment {
 
 		double cScore = getCollisionScore(tempState); // - zxt 
 		
-		if (stateValid(tempState)) {
+		if (stateValid(tempState, hardCheck, m_scale)) {
 			neighbors.emplace_back(Neighbor<State, Action, double>(tempState, 6, g, cScore));
 		}
 	}
@@ -416,12 +451,12 @@ class Environment {
 
 		for (size_t i = 0; i < m_goals.size(); i++)
 			for (size_t j = i + 1; j < m_goals.size(); j++) {
-				if (m_goals[i].agentCollision(m_goals[j])) {
+				if (m_goals[i].agentCollision(m_goals[j], 1)) {
 					std::cout << "ERROR: Goal point of " << i + iter * batchsize << " & "
 										<< j + iter * batchsize << " collide!\n";
 					return false;
 				}
-				if (m_starts[i].agentCollision(m_starts[j])) {
+				if (m_starts[i].agentCollision(m_starts[j], 1)) {
 					std::cout << "ERROR: Start point of " << i + iter * batchsize << " & "
 										<< j + iter * batchsize << " collide!\n";
 					return false;
@@ -442,7 +477,7 @@ class Environment {
 		return solution[agentIdx].states.back().first;
 	}
 
-	bool stateValid(const State &s) {
+	bool stateValid(const State &s, int hardCheck, double scale) {
 
 		// 检测静态障碍物碰撞
 		double x_ind = s.x / Constants::mapResolution;
@@ -464,11 +499,14 @@ class Environment {
 		// for (auto it = itlow; it != itup; ++it)
 		// 	if (s.agentCollision(it->second)) return false; - zxt 弃用
 
-		// 检测约束节点碰撞
-		for (auto it = m_constraints->constraints.begin();
+		if (hardCheck) {
+			// 检测约束节点碰撞
+			for (auto it = m_constraints->constraints.begin();
 				 it != m_constraints->constraints.end(); it++) {
-			if (!it->satisfyConstraint(s)) return false;
+			if (!it->satisfyConstraint(s, scale)) return false;
 		}
+		}
+
 
 		return true;
 	}
@@ -574,7 +612,7 @@ class Environment {
 								Constants::dy[act] * cos(-s.yaw);
 				yawSucc = Constants::normalizeHeadingRad(s.yaw + Constants::dyaw[act]);
 				State nextState(xSucc, ySucc, yawSucc, result.back().first.time + 1);
-				if (!stateValid(nextState)) return false;
+				if (!stateValid(nextState, 1, m_scale)) return false;
 				result.emplace_back(std::make_pair<>(nextState, Constants::dx[0]));
 			}
 			ratio =
@@ -593,7 +631,7 @@ class Environment {
 								Constants::dy[act] * cos(-s.yaw);
 				yawSucc = Constants::normalizeHeadingRad(s.yaw + Constants::dyaw[act]);
 				State nextState(xSucc, ySucc, yawSucc, result.back().first.time + 1);
-				if (!stateValid(nextState)) return false;
+				if (!stateValid(nextState, 1, m_scale)) return false;
 				result.emplace_back(std::make_pair<>(
 						nextState, Constants::dx[0] * Constants::penaltyTurning));
 			}
@@ -615,7 +653,7 @@ class Environment {
 		yawSucc = Constants::normalizeHeadingRad(s.yaw + dyaw);
 		// std::cout << m_agentIdx << " ratio::" << ratio << std::endl;
 		State nextState(xSucc, ySucc, yawSucc, result.back().first.time + 1);
-		if (!stateValid(nextState)) return false;
+		if (!stateValid(nextState, 1, m_scale)) return false;
 		result.emplace_back(std::make_pair<>(nextState, ratio * Constants::dx[0]));
 
 		// std::cout << "Have generate " << result.size() << " path segments:\n\t";
@@ -640,6 +678,7 @@ class Environment {
 	int m_lastGoalConstraint;
 	int m_highLevelExpanded;
 	int m_lowLevelExpanded;
+	double m_scale;
 };
 
 }  // namespace libMultiRobotPlanning
